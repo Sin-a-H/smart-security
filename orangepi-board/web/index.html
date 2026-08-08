@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sina Hashemi - 402102668 - Smart Security System</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a212b;
+    --border: #2b3540;
+    --accent: #4fd1c5;
+    --warn: #f6ad55;
+    --danger: #fc8181;
+    --text: #e6edf3;
+    --text-dim: #8b98a5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+
+  .container {
+    max-width: 1600px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: var(--text-dim); margin-bottom: 24px; font-size: 0.9rem; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 20px;
+  }
+
+  @media (min-width: 1400px) {
+    .grid { grid-template-columns: 3fr 1fr; }
+  }
+  @media (max-width: 800px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .panel h2 {
+    font-size: 1rem;
+    margin: 0 0 12px 0;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  #stream-img {
+    width: 100%;
+    border-radius: 6px;
+    background: #000;
+    display: block;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--text-dim); }
+  .stat-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat-value.hot { color: var(--danger); }
+  .stat-value.warm { color: var(--warn); }
+  .stat-value.highlight { color: var(--accent); }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 10px;
+  }
+  .switch {
+    position: relative;
+    width: 46px;
+    height: 24px;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: var(--border);
+    transition: .2s; border-radius: 24px;
+  }
+  .slider:before {
+    position: absolute; content: "";
+    height: 18px; width: 18px; left: 3px; bottom: 3px;
+    background-color: white; transition: .2s; border-radius: 50%;
+  }
+  input:checked + .slider { background-color: var(--danger); }
+  input:checked + .slider:before { transform: translateX(22px); }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .badge.ok { background: rgba(79,209,197,0.15); color: var(--accent); }
+  .badge.off { background: rgba(139,152,165,0.15); color: var(--text-dim); }
+  footer { margin-top: 20px; color: var(--text-dim); font-size: 0.8rem; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>Smart Security System</h1>
+  <div class="subtitle">Sina Hashemi &middot; Student No. 402102668 &middot; Orange Pi</div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Live Camera Stream</h2>
+      <img id="stream-img" src="/api/v1/stream" alt="Live camera stream">
+    </div>
+
+    <div class="panel">
+      <h2>System Telemetry</h2>
+      <div class="stat-row">
+        <span class="stat-label">CPU Temperature</span>
+        <span class="stat-value" id="cpu-temp">-- &deg;C</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Free Memory</span>
+        <span class="stat-value" id="mem-free">-- MB</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">CPU Load</span>
+        <span class="stat-value" id="cpu-load">-- %</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Thermal State</span>
+        <span class="stat-value" id="thermal-state"><span class="badge off">normal</span></span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Last Updated</span>
+        <span class="stat-value" id="last-updated">--</span>
+      </div>
+
+      <h2 style="margin-top:20px;">Guard / Anti-Theft Mode</h2>
+      <div class="toggle-row">
+        <span class="stat-label">Instant alert on any detection</span>
+        <label class="switch">
+          <input type="checkbox" id="guard-toggle" onchange="toggleGuardMode(this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <h2 style="margin-top:20px;">Black Box</h2>
+      <div class="stat-row">
+        <span class="stat-label">Total detections (lifetime)</span>
+        <span class="stat-value" id="total-detections">--</span>
+      </div>
+
+      <div class="stat-row">
+        <span class="stat-label">People Detected</span>
+        <span class="stat-value highlight" id="person-count">--</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Detector FPS</span>
+        <span class="stat-value" id="detector-fps">-- fps</span>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Data refreshes every 2 seconds. API documentation available via Swagger at
+    <code>/docs</code> on the gateway service.
+  </footer>
+</div>
+
+<script>
+async function refreshTelemetry() {
+  try {
+    const res = await fetch('/api/v1/telemetry');
+    const data = await res.json();
+
+    const tempEl = document.getElementById('cpu-temp');
+    tempEl.textContent = data.cpu_temp_c.toFixed(1) + ' \u00b0C';
+    tempEl.className = 'stat-value' + (data.cpu_temp_c >= 70 ? ' hot' : data.cpu_temp_c >= 60 ? ' warm' : '');
+
+    document.getElementById('mem-free').textContent =
+      data.mem_free_mb.toFixed(0) + ' / ' + data.mem_total_mb.toFixed(0) + ' MB';
+    document.getElementById('cpu-load').textContent = data.cpu_load_pct.toFixed(1) + ' %';
+
+    const thermalEl = document.getElementById('thermal-state');
+    thermalEl.innerHTML = data.throttled
+      ? '<span class="badge" style="background:rgba(252,129,129,0.15); color:#fc8181;">throttled (' + data.target_fps + ' fps)</span>'
+      : '<span class="badge ok">normal</span>';
+
+    document.getElementById('last-updated').textContent = data.timestamp;
+  } catch (e) {
+    console.error('telemetry fetch failed', e);
+  }
+}
+
+async function refreshPersons() {
+  try {
+    const res = await fetch('/api/v1/persons');
+    const data = await res.json();
+    document.getElementById('person-count').textContent = data.person_count;
+    document.getElementById('detector-fps').textContent = data.detector_fps.toFixed(1) + ' fps';
+  } catch (e) {
+    console.error('persons fetch failed', e);
+  }
+}
+
+async function refreshTotalDetections() {
+  try {
+    const res = await fetch('/api/v1/detections/total');
+    const data = await res.json();
+    document.getElementById('total-detections').textContent = data.total_detections;
+  } catch (e) {
+    console.error('detections fetch failed', e);
+  }
+}
+
+async function toggleGuardMode(enabled) {
+  try {
+    await fetch('/api/v1/guard-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled ? 1 : 0 })
+    });
+  } catch (e) {
+    console.error('guard mode toggle failed', e);
+  }
+}
+
+setInterval(refreshTelemetry, 2000);
+setInterval(refreshPersons, 2000);
+setInterval(refreshTotalDetections, 5000);
+refreshTelemetry();
+refreshPersons();
+refreshTotalDetections();
+</script>
+
+</body>
+</html>

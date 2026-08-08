@@ -1,0 +1,25 @@
+[Unit]
+Description=Smart Security System - Person detection (image processing)
+
+After=network-online.target security-board.service
+Requires=security-board.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/smart-security/detector
+ExecStart=/opt/smart-security/detector/venv/bin/python3 /opt/smart-security/detector/person_detector.py \
+    --stream-url http://192.168.1.105:8090/stream.mjpg \
+    --board-api https://127.0.0.1/internal/detector-update \
+    --board-api-insecure \
+    --student-id 402102668
+Restart=on-failure
+RestartSec=3
+User=security
+Group=security
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=person-detector
+
+[Install]
+WantedBy=multi-user.target
