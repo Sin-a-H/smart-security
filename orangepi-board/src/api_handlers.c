@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
 
 static void format_iso_time(time_t t, char *out, size_t out_sz)
 {
@@ -109,24 +110,41 @@ int api_handle_command(board_state_t *st, const char *request_body, char *out_bu
     }
 
     if (strcmp(cmd, "reboot") == 0) {
-        *http_status = 200;
-        int n = snprintf(out_buf, out_sz, "{\"result\":\"reboot scheduled\"}");
-        /* Delay slightly so the HTTP response actually reaches the
-         * client before the board goes down. */
-        if (fork() == 0) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "[api] reboot command: fork() failed: %s\n", strerror(errno));
+            *http_status = 500;
+            return snprintf(out_buf, out_sz, "{\"error\":\"failed to schedule reboot (fork failed)\"}");
+        }
+        if (pid == 0) {
             sleep(2);
             execlp("sudo", "sudo", "/sbin/reboot", (char *)NULL);
+            fprintf(stderr, "[api] reboot command: execlp(sudo /sbin/reboot) failed: %s -- "
+                            "check that the service user has a passwordless sudoers rule for "
+                            "/sbin/reboot (see SETUP_GUIDE.md section 4.7)\n", strerror(errno));
             _exit(1);
         }
-        return n;
-    } else if (strcmp(cmd, "restart_camera_service") == 0) {
+
         *http_status = 200;
-        int n = snprintf(out_buf, out_sz, "{\"result\":\"camera service restart scheduled\"}");
-        if (fork() == 0) {
+        return snprintf(out_buf, out_sz, "{\"result\":\"reboot scheduled\"}");
+
+    } else if (strcmp(cmd, "restart_camera_service") == 0) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "[api] restart_camera_service command: fork() failed: %s\n", strerror(errno));
+            *http_status = 500;
+            return snprintf(out_buf, out_sz, "{\"error\":\"failed to schedule restart (fork failed)\"}");
+        }
+        if (pid == 0) {
             execlp("sudo", "sudo", "/bin/systemctl", "restart", "person-detector.service", (char *)NULL);
+            fprintf(stderr, "[api] restart_camera_service command: execlp(sudo systemctl restart) failed: %s -- "
+                            "check that the service user has a passwordless sudoers rule for "
+                            "'systemctl restart person-detector.service' (see SETUP_GUIDE.md section 4.7)\n",
+                            strerror(errno));
             _exit(1);
         }
-        return n;
+        *http_status = 200;
+        return snprintf(out_buf, out_sz, "{\"result\":\"camera service restart scheduled\"}");
     }
 
     *http_status = 400;
@@ -154,8 +172,7 @@ int api_handle_guard_mode(board_state_t *st, const char *request_body, char *out
 int api_handle_total_detections(board_state_t *st, char *out_buf, size_t out_sz, int *http_status)
 {
     (void)st;
-    /* Reads the durable, SQLite-backed lifetime counter. rather than
-     * the in-memory st->total_detections, which is reset on every reboot. */
+
     long total = blackbox_get_total_detections();
 
     *http_status = 200;
@@ -174,10 +191,7 @@ int api_handle_detector_update(board_state_t *st, const char *request_body, char
     if (json_min_get_string(request_body, "fps", fps_str, sizeof(fps_str)) == 0) {
         fps = atof(fps_str);
     }
-    /* The detector saves the annotated frame to a local file
-     * (see person_detector.py's --snapshot-dir) and includes its path
-     * here so the C emailer can attach a real image. If absent,
-     * emails are sent without an attachment rather than failing. */
+
     json_min_get_string(request_body, "jpeg_path", jpeg_path, sizeof(jpeg_path));
 
     time_t now = time(NULL);
@@ -204,7 +218,6 @@ int api_handle_detector_update(board_state_t *st, const char *request_body, char
     pthread_mutex_unlock(&st->mutex);
 
     if (count > 0) {
-        /* Durable black box. */
         blackbox_record_detection(now, count, cpu_temp_snapshot);
 
         if (guard_mode) {
