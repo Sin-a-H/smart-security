@@ -57,7 +57,7 @@ VOC_CLASSES = [
 ]
 PERSON_CLASS_ID = VOC_CLASSES.index("person")
 
-DETECTOR_INPUT_SIZE = (300, 300)  # required by this network's architecture
+DETECTOR_INPUT_SIZE = (192, 192)  # required by this network's architecture
 DETECTOR_SCALE = 0.007843          # = 1/127.5, matches training preprocessing
 DETECTOR_MEAN = (127.5, 127.5, 127.5)
 
