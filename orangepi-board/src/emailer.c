@@ -100,9 +100,6 @@ static CURLcode do_send(const emailer_config_t *cfg, const char *subject,
     curl_mime *mime = curl_mime_init(curl);
 
     curl_mimepart *part = curl_mime_addpart(mime);
-    char headers_buf[1024];
-    snprintf(headers_buf, sizeof(headers_buf),
-             "From: %s\r\nTo: %s\r\nSubject: %s\r\n", cfg->from_addr, cfg->to_addr, subject);
     curl_mime_data(part, body, CURL_ZERO_TERMINATED);
     curl_mime_type(part, "text/plain");
 
@@ -110,17 +107,21 @@ static CURLcode do_send(const emailer_config_t *cfg, const char *subject,
         curl_mimepart *att = curl_mime_addpart(mime);
         curl_mime_filedata(att, attachment_jpeg_path);
         curl_mime_type(att, "image/jpeg");
+
+        curl_mime_encoder(att, "base64");
     }
 
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 
-    /* prepend headers by using CURLOPT_HTTPHEADER-equivalent for SMTP:
-     * libcurl SMTP takes headers from the mime part's own header list
-     * when CURLOPT_MIMEPOST is used, but Subject/From/To need to be on
-     * the top-level message. */
     struct curl_slist *msg_headers = NULL;
-    msg_headers = curl_slist_append(msg_headers, headers_buf);
-    curl_mime_headers(curl_mime_addpart(mime), msg_headers, 1);
+    char from_hdr[300], to_hdr[300], subject_hdr[350];
+    snprintf(from_hdr, sizeof(from_hdr), "From: %s", cfg->from_addr);
+    snprintf(to_hdr, sizeof(to_hdr), "To: %s", cfg->to_addr);
+    snprintf(subject_hdr, sizeof(subject_hdr), "Subject: %s", subject);
+    msg_headers = curl_slist_append(msg_headers, from_hdr);
+    msg_headers = curl_slist_append(msg_headers, to_hdr);
+    msg_headers = curl_slist_append(msg_headers, subject_hdr);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, msg_headers);
 
     res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
@@ -128,6 +129,7 @@ static CURLcode do_send(const emailer_config_t *cfg, const char *subject,
     }
 
     curl_slist_free_all(recipients);
+    curl_slist_free_all(msg_headers);
     curl_mime_free(mime);
     curl_easy_cleanup(curl);
     return res;

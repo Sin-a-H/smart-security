@@ -318,8 +318,7 @@ real values, then:
 sudo cp orangepi-board/systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable security-board.service person-detector.service swagger-gateway.service
-sudo systemctl start security-board.service
-# person-detector and swagger-gateway will auto-start after security-board
+sudo systemctl start security-board.service person-detector.service swagger-gateway.service
 ```
 
 ### 4.9 Set up the Python virtual environments the systemd units expect

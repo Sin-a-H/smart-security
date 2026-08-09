@@ -114,6 +114,24 @@
   }
   .badge.ok { background: rgba(79,209,197,0.15); color: var(--accent); }
   .badge.off { background: rgba(139,152,165,0.15); color: var(--text-dim); }
+
+  .stream-btn {
+    background: var(--bg);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: .15s;
+  }
+  .stream-btn:hover { border-color: var(--accent); color: var(--text); }
+  .stream-btn.active {
+    background: rgba(79,209,197,0.15);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
   footer { margin-top: 20px; color: var(--text-dim); font-size: 0.8rem; }
 </style>
 </head>
@@ -126,7 +144,15 @@
   <div class="grid">
     <div class="panel">
       <h2>Live Camera Stream</h2>
+      <div class="toggle-row" style="margin-top:0; margin-bottom:12px;">
+        <span class="stat-label">Source</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button id="btn-raw" class="stream-btn active" onclick="setStreamSource('raw')">Raw Camera</button>
+          <button id="btn-detector" class="stream-btn" onclick="setStreamSource('detector')">Detector Output</button>
+        </div>
+      </div>
       <img id="stream-img" src="/api/v1/stream" alt="Live camera stream">
+      <div id="stream-error" style="display:none; margin-top:8px; padding:8px 10px; border-radius:6px; background:rgba(252,129,129,0.12); color:var(--danger); font-size:0.8rem;"></div>
     </div>
 
     <div class="panel">
@@ -185,6 +211,51 @@
 </div>
 
 <script>
+// --- Stream source switching (raw camera vs. detector output) ---
+//
+// Both streams are proxied through the board's own C server
+// (security-board) and served from THIS SAME https origin:
+//   /api/v1/stream           -> raw camera feed
+//   /api/v1/detector-stream  -> the Python detector's annotated output
+
+let currentStreamSource = localStorage.getItem('streamSource') || 'raw';
+
+function setStreamSource(source) {
+  currentStreamSource = source;
+  localStorage.setItem('streamSource', source);
+  document.getElementById('btn-raw').classList.toggle('active', source === 'raw');
+  document.getElementById('btn-detector').classList.toggle('active', source === 'detector');
+  applyStreamSource();
+}
+
+function applyStreamSource() {
+  const img = document.getElementById('stream-img');
+  const errorBox = document.getElementById('stream-error');
+  errorBox.style.display = 'none';
+
+  // Capture which source THIS call is for, so a late-firing async
+  // onerror/onload from a since-abandoned attempt can't act on stale
+  // state if the user switches sources again quickly.
+  const requestedSource = currentStreamSource;
+  const url = requestedSource === 'raw' ? '/api/v1/stream' : '/api/v1/detector-stream';
+
+  img.onerror = () => {
+    if (currentStreamSource !== requestedSource) return;
+    errorBox.style.display = 'block';
+    errorBox.textContent = requestedSource === 'detector'
+      ? 'Could not load the detector stream. Make sure person_detector.py is running and ' +
+        'security-board was started with its --annotated-port URL as the 4th argument ' +
+        '(see person-detector.service / security-board.service).'
+      : 'Could not load the camera stream. Check that the laptop\u2019s camera bridge ' +
+        '(laptop_cam_server.py) is running and reachable from the board.';
+  };
+  img.onload = () => {
+    if (currentStreamSource !== requestedSource) return;
+    errorBox.style.display = 'none';
+  };
+  img.src = url;
+}
+
 async function refreshTelemetry() {
   try {
     const res = await fetch('/api/v1/telemetry');
@@ -245,6 +316,9 @@ async function toggleGuardMode(enabled) {
 setInterval(refreshTelemetry, 2000);
 setInterval(refreshPersons, 2000);
 setInterval(refreshTotalDetections, 5000);
+document.getElementById('btn-raw').classList.toggle('active', currentStreamSource === 'raw');
+document.getElementById('btn-detector').classList.toggle('active', currentStreamSource === 'detector');
+if (currentStreamSource === 'detector') applyStreamSource(); // 'raw' is already the img's default src in the HTML
 refreshTelemetry();
 refreshPersons();
 refreshTotalDetections();

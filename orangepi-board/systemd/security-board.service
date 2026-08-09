@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/smart-security/bin/security-board 402102668 "Sina Hashemi" http://192.168.1.105:8090/stream.mjpg
+ExecStart=/opt/smart-security/bin/security-board 402102668 "Sina Hashemi" http://192.168.1.105:8090/stream.mjpg http://127.0.0.1:8091/annotated.mjpg
 Restart=on-failure
 RestartSec=3
 

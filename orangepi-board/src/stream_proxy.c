@@ -13,19 +13,20 @@
 #include <arpa/inet.h>
 
 #define MAX_FRAME_BYTES   (2 * 1024 * 1024)  /* 2MB safety cap per JPEG frame */
-#define RECV_CHUNK        8192
 
-static unsigned char g_frame_buf[MAX_FRAME_BYTES];
-static size_t g_frame_len = 0;
-static pthread_mutex_t g_frame_mutex = PTHREAD_MUTEX_INITIALIZER;
-static long g_last_frame_time = 0;
+struct stream_proxy {
+    char host[256];
+    char path[256];
+    int  port;
+    char label[32];
 
-static char g_host[256];
-static char g_path[256];
-static int  g_port = 80;
+    pthread_mutex_t frame_mutex;
+    unsigned char *frame_buf;   /* MAX_FRAME_BYTES, heap-allocated per instance */
+    size_t frame_len;
+    long last_frame_time;
+};
 
-/* Parses a URL of the form http://host:port/path into components.
- * Minimal by design: this only ever talks to our own laptop_cam_server. */
+/* Parses a URL of the form http://host:port/path into components. */
 static int parse_url(const char *url, char *host, size_t host_sz, int *port, char *path, size_t path_sz)
 {
     const char *p = url;
@@ -88,17 +89,22 @@ static int connect_to(const char *host, int port)
 /* Reads from sock into a growable ring-free linear buffer, scanning for
  * MJPEG multipart frames: "--FRAME\r\nContent-Type: ...\r\nContent-Length: N\r\n\r\n<N bytes>\r\n"
  * This is intentionally tolerant of exact header ordering/case since we
- * control the server (laptop_cam_server.py) but keep it robust anyway. */
+ * control the sources but keep it robust anyway. */
 static void *proxy_loop(void *arg)
 {
-    (void)arg;
-    static unsigned char recv_buf[MAX_FRAME_BYTES];
+    stream_proxy_t *proxy = (stream_proxy_t *)arg;
+    unsigned char *recv_buf = malloc(MAX_FRAME_BYTES);
+    if (!recv_buf) {
+        fprintf(stderr, "[stream_proxy:%s] failed to allocate receive buffer\n", proxy->label);
+        return NULL;
+    }
     size_t buf_len = 0;
 
     while (1) {
-        int sock = connect_to(g_host, g_port);
+        int sock = connect_to(proxy->host, proxy->port);
         if (sock < 0) {
-            fprintf(stderr, "[stream_proxy] cannot connect to %s:%d, retrying in 3s\n", g_host, g_port);
+            fprintf(stderr, "[stream_proxy:%s] cannot connect to %s:%d, retrying in 3s\n",
+                    proxy->label, proxy->host, proxy->port);
             sleep(3);
             continue;
         }
@@ -106,7 +112,7 @@ static void *proxy_loop(void *arg)
         char request[768];
         snprintf(request, sizeof(request),
                  "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\n\r\n",
-                 g_path, g_host);
+                 proxy->path, proxy->host);
         if (send(sock, request, strlen(request), 0) < 0) {
             close(sock);
             sleep(2);
@@ -117,9 +123,9 @@ static void *proxy_loop(void *arg)
         int header_skipped = 0;
 
         while (1) {
-            ssize_t n = recv(sock, recv_buf + buf_len, sizeof(recv_buf) - buf_len, 0);
+            ssize_t n = recv(sock, recv_buf + buf_len, MAX_FRAME_BYTES - buf_len, 0);
             if (n <= 0) {
-                fprintf(stderr, "[stream_proxy] connection lost, reconnecting\n");
+                fprintf(stderr, "[stream_proxy:%s] connection lost, reconnecting\n", proxy->label);
                 break;
             }
             buf_len += (size_t)n;
@@ -128,7 +134,7 @@ static void *proxy_loop(void *arg)
             if (!header_skipped) {
                 unsigned char *hdr_end = (unsigned char *)memmem(recv_buf, buf_len, "\r\n\r\n", 4);
                 if (!hdr_end) {
-                    if (buf_len >= sizeof(recv_buf)) buf_len = 0; /* malformed, reset */
+                    if (buf_len >= MAX_FRAME_BYTES) buf_len = 0; /* malformed, reset */
                     continue;
                 }
                 size_t consumed = (hdr_end - recv_buf) + 4;
@@ -162,18 +168,18 @@ static void *proxy_loop(void *arg)
                 if (available_after_header < (size_t)content_len) break; /* need more data */
 
                 /* We have a full frame. */
-                pthread_mutex_lock(&g_frame_mutex);
-                memcpy(g_frame_buf, jpeg_start, (size_t)content_len);
-                g_frame_len = (size_t)content_len;
-                g_last_frame_time = time(NULL);
-                pthread_mutex_unlock(&g_frame_mutex);
+                pthread_mutex_lock(&proxy->frame_mutex);
+                memcpy(proxy->frame_buf, jpeg_start, (size_t)content_len);
+                proxy->frame_len = (size_t)content_len;
+                proxy->last_frame_time = time(NULL);
+                pthread_mutex_unlock(&proxy->frame_mutex);
 
                 size_t consumed = (jpeg_start - recv_buf) + content_len;
                 memmove(recv_buf, recv_buf + consumed, buf_len - consumed);
                 buf_len -= consumed;
             }
 
-            if (buf_len >= sizeof(recv_buf) - 1) {
+            if (buf_len >= MAX_FRAME_BYTES - 1) {
                 /* Shouldn't normally happen; guard against runaway growth. */
                 buf_len = 0;
             }
@@ -182,44 +188,73 @@ static void *proxy_loop(void *arg)
         close(sock);
         sleep(1);
     }
+    free(recv_buf); /* unreachable (proxy_loop runs forever), kept for completeness/analyzers */
     return NULL;
 }
 
-int stream_proxy_start(const char *laptop_url)
+stream_proxy_t *stream_proxy_start(const char *source_url, const char *label)
 {
-    if (parse_url(laptop_url, g_host, sizeof(g_host), &g_port, g_path, sizeof(g_path)) != 0) {
-        fprintf(stderr, "[stream_proxy] failed to parse URL: %s\n", laptop_url);
-        return -1;
+    stream_proxy_t *proxy = calloc(1, sizeof(stream_proxy_t));
+    if (!proxy) {
+        fprintf(stderr, "[stream_proxy] failed to allocate proxy instance for '%s'\n", label);
+        return NULL;
     }
 
+    if (parse_url(source_url, proxy->host, sizeof(proxy->host), &proxy->port,
+                  proxy->path, sizeof(proxy->path)) != 0) {
+        fprintf(stderr, "[stream_proxy] failed to parse URL: %s\n", source_url);
+        free(proxy);
+        return NULL;
+    }
+
+    strncpy(proxy->label, label, sizeof(proxy->label) - 1);
+
+    proxy->frame_buf = malloc(MAX_FRAME_BYTES);
+    if (!proxy->frame_buf) {
+        fprintf(stderr, "[stream_proxy:%s] failed to allocate frame buffer\n", proxy->label);
+        free(proxy);
+        return NULL;
+    }
+
+    pthread_mutex_init(&proxy->frame_mutex, NULL);
+
     pthread_t tid;
-    int rc = pthread_create(&tid, NULL, proxy_loop, NULL);
-    if (rc != 0) return -1;
+    int rc = pthread_create(&tid, NULL, proxy_loop, proxy);
+    if (rc != 0) {
+        fprintf(stderr, "[stream_proxy:%s] failed to start puller thread\n", proxy->label);
+        free(proxy->frame_buf);
+        free(proxy);
+        return NULL;
+    }
     pthread_detach(tid);
-    return 0;
+    return proxy;
 }
 
-int stream_proxy_get_latest_frame(unsigned char *buf, size_t buf_size)
+int stream_proxy_get_latest_frame(stream_proxy_t *proxy, unsigned char *buf, size_t buf_size)
 {
-    pthread_mutex_lock(&g_frame_mutex);
-    size_t len = g_frame_len;
+    if (!proxy) return 0; /* no proxy configured for this stream (e.g. detector not set up) */
+
+    pthread_mutex_lock(&proxy->frame_mutex);
+    size_t len = proxy->frame_len;
     int result;
     if (len == 0) {
         result = 0;
     } else if (len > buf_size) {
         result = -1;
     } else {
-        memcpy(buf, g_frame_buf, len);
+        memcpy(buf, proxy->frame_buf, len);
         result = (int)len;
     }
-    pthread_mutex_unlock(&g_frame_mutex);
+    pthread_mutex_unlock(&proxy->frame_mutex);
     return result;
 }
 
-long stream_proxy_last_frame_time(void)
+long stream_proxy_last_frame_time(stream_proxy_t *proxy)
 {
-    pthread_mutex_lock(&g_frame_mutex);
-    long t = g_last_frame_time;
-    pthread_mutex_unlock(&g_frame_mutex);
+    if (!proxy) return 0;
+
+    pthread_mutex_lock(&proxy->frame_mutex);
+    long t = proxy->last_frame_time;
+    pthread_mutex_unlock(&proxy->frame_mutex);
     return t;
 }

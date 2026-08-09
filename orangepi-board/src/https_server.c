@@ -22,7 +22,6 @@ static https_server_config_t g_cfg;
 static board_state_t *g_st;
 static SSL_CTX *g_ssl_ctx;
 
-/* forward declarations */
 static const char *memmem_(const char *haystack, size_t hlen, const char *needle, size_t nlen);
 static const char *strcasestr_(const char *haystack, const char *needle);
 
@@ -36,8 +35,7 @@ typedef struct {
     char body[4096];
 } http_request_t;
 
-/* HTTP/1.1 request-line + headers + body parser. Not meant to be a
- * general-purpose HTTP parser. */
+/* HTTP/1.1 request-line + headers + body parser. */
 static int parse_http_request(const char *raw, size_t raw_len, http_request_t *req)
 {
     memset(req, 0, sizeof(*req));
@@ -148,12 +146,14 @@ static void serve_index_html(SSL *ssl, int plain_fd)
     free(buf);
 }
 
-/* Serves the live MJPEG stream by pulling latest frames from
- * stream_proxy and multipart-encoding them to this client, exactly
- * like laptop_cam_server.py does -- so any MJPEG-capable client
- * (browser <img>, Swagger, VLC) can consume /api/v1/stream directly. */
-static void serve_mjpeg_stream(SSL *ssl, int plain_fd)
+static void serve_mjpeg_stream(SSL *ssl, int plain_fd, stream_proxy_t *proxy)
 {
+    if (!proxy) {
+        const char *msg = "{\"error\":\"stream not configured\"}";
+        send_json(ssl, plain_fd, 404, msg, strlen(msg));
+        return;
+    }
+
     char header[256];
     int hlen = snprintf(header, sizeof(header),
         "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=FRAME\r\n"
@@ -165,7 +165,7 @@ static void serve_mjpeg_stream(SSL *ssl, int plain_fd)
     static __thread unsigned char frame_buf[2 * 1024 * 1024];
 
     for (int i = 0; i < 100000; i++) { /* bounded loop: ~ long-lived but not infinite per thread */
-        int n = stream_proxy_get_latest_frame(frame_buf, sizeof(frame_buf));
+        int n = stream_proxy_get_latest_frame(proxy, frame_buf, sizeof(frame_buf));
         if (n > 0) {
             char part_hdr[128];
             int phlen = snprintf(part_hdr, sizeof(part_hdr),
@@ -192,7 +192,10 @@ static void route_request(SSL *ssl, int plain_fd, const http_request_t *req)
         serve_index_html(ssl, plain_fd);
 
     } else if (strcasecmp(req->path, "/api/v1/stream") == 0 && strcmp(req->method, "GET") == 0) {
-        serve_mjpeg_stream(ssl, plain_fd);
+        serve_mjpeg_stream(ssl, plain_fd, g_st->camera_proxy);
+
+    } else if (strcasecmp(req->path, "/api/v1/detector-stream") == 0 && strcmp(req->method, "GET") == 0) {
+        serve_mjpeg_stream(ssl, plain_fd, g_st->detector_proxy);
 
     } else if (strcasecmp(req->path, "/api/v1/persons") == 0 && strcmp(req->method, "GET") == 0) {
         n = api_handle_persons(g_st, json_buf, sizeof(json_buf), &status);

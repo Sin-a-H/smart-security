@@ -5,10 +5,7 @@
  * after the network and the laptop-stream dependency are up.
  *
  * Usage:
- *   ./security-board <student_id> <student_name> <laptop_stream_url>
- *
- * Example:
- *   ./security-board 402102668 "Sina Hashemi" http://192.168.1.50:8090/stream.mjpg
+ *   ./security-board <student_id> <student_name> <laptop_stream_url> [detector_stream_url]
  */
 
 #include "board_state.h"
@@ -29,8 +26,8 @@ int main(int argc, char *argv[])
     setvbuf(stderr, NULL, _IONBF, 0); /* ensure diagnostic logs are never lost to buffering */
 
     if (argc < 4) {
-        fprintf(stderr, "Usage: %s <student_id> <student_name> <laptop_stream_url>\n", argv[0]);
-        fprintf(stderr, "Example: %s 402102668 \"Sina Hashemi\" http://192.168.1.50:8090/stream.mjpg\n", argv[0]);
+        fprintf(stderr, "Usage: %s <student_id> <student_name> <laptop_stream_url> [detector_stream_url]\n", argv[0]);
+        fprintf(stderr, "Example: %s 99123456 \"Jane Doe\" http://192.168.1.50:8090/stream.mjpg http://127.0.0.1:8091/annotated.mjpg\n", argv[0]);
         return 1;
     }
 
@@ -39,6 +36,7 @@ int main(int argc, char *argv[])
     const char *student_id = argv[1];
     const char *student_name = argv[2];
     const char *laptop_url = argv[3];
+    const char *detector_stream_url = (argc >= 5) ? argv[4] : NULL;
 
     board_state_init(&g_state, student_id, student_name, laptop_url);
 
@@ -49,8 +47,20 @@ int main(int argc, char *argv[])
                         "/api/v1/detections/total will report 0 until this is fixed\n", blackbox_path);
     }
 
-    if (stream_proxy_start(laptop_url) != 0) {
-        fprintf(stderr, "[board_main] WARNING: failed to start stream proxy for %s\n", laptop_url);
+    g_state.camera_proxy = stream_proxy_start(laptop_url, "camera");
+    if (!g_state.camera_proxy) {
+        fprintf(stderr, "[board_main] WARNING: failed to start camera stream proxy for %s\n", laptop_url);
+    }
+
+    if (detector_stream_url) {
+        g_state.detector_proxy = stream_proxy_start(detector_stream_url, "detector");
+        if (!g_state.detector_proxy) {
+            fprintf(stderr, "[board_main] WARNING: failed to start detector stream proxy for %s\n",
+                    detector_stream_url);
+        }
+    } else {
+        fprintf(stderr, "[board_main] no detector_stream_url given -- "
+                        "/api/v1/detector-stream will return 404 until one is configured\n");
     }
 
     if (sensor_thread_start(&g_state) != 0) {

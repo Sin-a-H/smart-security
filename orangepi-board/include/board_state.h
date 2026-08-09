@@ -19,6 +19,11 @@
 #include <stdint.h>
 #include <time.h>
 
+/* Forward declaration only -- board_state.h doesn't need the full
+ * stream_proxy.h definition, just a pointer type, so we avoid an
+ * unnecessary include here. */
+typedef struct stream_proxy stream_proxy_t;
+
 #define STUDENT_ID_MAXLEN     32
 #define HISTORY_CAPACITY      5     /* "last 5 records" per the spec */
 #define MAX_STREAM_URL_LEN    256
@@ -67,6 +72,10 @@ typedef struct {
 
     /* ---- laptop stream source ---- */
     char     laptop_stream_url[MAX_STREAM_URL_LEN];
+
+    /* ---- stream proxy handles ---- */
+    stream_proxy_t *camera_proxy;
+    stream_proxy_t *detector_proxy;
 
     /* ---- MQTT topics, derived from student_id at startup ---- */
     char     topic_persons[MAX_TOPIC_LEN];
