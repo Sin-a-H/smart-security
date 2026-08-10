@@ -1,11 +1,9 @@
 # Smart Security System — Setup Guide
 
-This is the single reference for getting every piece of the system running:
+This is the reference for getting every piece of the system running:
 the Orange Pi board program, the laptop-as-camera bridge, the person
 detector, the Mosquitto broker (with authentication and ACLs), the FastAPI
-Swagger layer, and SSH hardening. Every command and config in this guide has
-been executed and verified during development (not just written from memory)
-— see the inline notes where a specific gotcha was found.
+Swagger layer, and SSH hardening.
 
 ---
 
@@ -15,44 +13,39 @@ There are **two physical machines**:
 
 | Machine | Role |
 |---|---|
-| **Orange Pi Zero 2/3** | Runs the C board program (HTTPS server, REST API, MQTT client, email sender, watchdog), the Python person detector, and the FastAPI Swagger gateway. |
-| **Laptop** | Runs (a) the webcam→MJPEG bridge, since the board has no camera, and (b) the Mosquitto broker + subscriber, since the spec asks for the broker to run on the personal computer. |
+| **Orange Pi Zero** | Runs the C board program (HTTPS server, REST API, MQTT client, email sender, watchdog), the Python person detector, and the FastAPI Swagger gateway. |
+| **Laptop** | Runs a webcam to MJPEG bridge, since the board has no camera, and the Mosquitto broker + subscriber.|
 
 ```
-+----------------------+         MJPEG/HTTP          +--------------------------------+
-|      LAPTOP           | ---------------------------->|         ORANGE PI              |
-|                        |  :8090/stream.mjpg           |                                |
-| laptop_cam_server.py   |                               |  security-board (C)            |
-|  (webcam capture)      |                               |   |- HTTPS server :443         |
-|                        |                               |   |- REST API /api/v1/*        |
-| mosquitto broker       |<---- MQTT persons/telemetry --|   |- MQTT client (libmosquitto) |
-|  :1883                 |      /alarm  (QoS1, LWT)      |   |- email sender (libcurl)     |
-|                        |                               |   |- SQLite black box           |
-| mosquitto_sub          |                               |   `- software watchdog          |
-|  (view messages)       |                               |                                |
-+----------------------+                               |  person_detector.py (Python)    |
-                                                          |   `- pulls MJPEG, posts to       |
-                                                          |      /internal/detector-update   |
-                                                          |                                |
-                                                          |  FastAPI gateway (Swagger UI)    |
-                                                          |   `- forwards to the C API        |
-                                                          +--------------------------------+
++-----------------------+         MJPEG/HTTP          +--------------------------------+
+|      LAPTOP           | --------------------------->|         ORANGE PI              |
+|                       |  :8090/stream.mjpg          |                                |
+| laptop_cam_server.py  |                             |  security-board (C)            |
+|  (webcam capture)     |                             |   |- HTTPS server :443         |
+|                       |                             |   |- REST API /api/v1/*        |
+| mosquitto broker      |<-- MQTT persons/telemetry --|   |- MQTT client (libmosquitto)|
+|  :1883                |    /alarm  (QoS1, LWT)      |   |- email sender (libcurl)    |
+|                       |                             |   |- SQLite black box          |
+| mosquitto_sub         |                             |   `- software watchdog         |
+|  (view messages)      |                             |                                |
++-----------------------+                             |  person_detector.py (Python)   |
+                                                      |   `- pulls MJPEG, posts to     |
+                                                      |      /internal/detector-update |
+                                                      |                                |
+                                                      |  FastAPI gateway (Swagger UI)  |
+                                                      |   `- forwards to the C API     |
+                                                      +--------------------------------+
 ```
 
 Both machines must be on the same LAN (or reachable via routed IPs). Note
 down the laptop's LAN IP (`ip addr` / `ifconfig` on Linux/macOS, `ipconfig`
-on Windows) and the board's LAN IP — you'll substitute these into commands
+on Windows) and the board's LAN IP. you'll substitute these into commands
 below. This guide uses `192.168.1.50` for the laptop and `192.168.1.10` for
 the board as placeholders.
 
 ---
 
 ## 2. Laptop setup: webcam to MJPEG bridge
-
-The Orange Pi Zero 2/3 has no camera connector in this build, so per the
-spec ("If the board does not have a camera, use a webcam and add a step of
-streaming the image from the laptop to the board"), the laptop's own webcam
-is captured and re-published as MJPEG-over-HTTP.
 
 ### 2.1 Install dependencies
 
@@ -84,15 +77,11 @@ python3 laptop_cam_server.py --port 8090 --camera 0 --width 640 --height 480 --f
 
 Make sure the laptop's firewall allows inbound connections on port 8090
 from the board's IP (or from the whole LAN subnet for simplicity during
-development). On Ubuntu: `sudo ufw allow from 192.168.1.0/24 to any port 8090`.
+development).
 
 ---
 
 ## 3. Mosquitto broker setup (on the laptop)
-
-The spec requires: broker running on the PC, no anonymous MQTT logins, a
-dedicated user with a unique password, and messages structured as
-`persons/<student_id>/home` and `telemetry/<student_id>/home`.
 
 ### 3.1 Install Mosquitto
 
@@ -113,10 +102,8 @@ sudo mosquitto_passwd -b /etc/mosquitto/passwordfile monitor MonitorPass
 # (adds a second user for the PC-side subscriber / grading, without -c so it appends)
 ```
 
-> **Verified gotcha:** Mosquitto 2.x refuses to load a password file (or
-> ACL file) that is world-readable or not owned by the `mosquitto` user --
-> it prints a warning now and will hard-refuse in future versions. Fix
-> with:
+> Mosquitto 2.x refuses to load a password file (or ACL file) that is
+> world-readable or not owned by the `mosquitto` user. Fix with:
 > ```bash
 > sudo chown mosquitto:mosquitto /etc/mosquitto/passwordfile
 > sudo chmod 0700 /etc/mosquitto/passwordfile
@@ -124,9 +111,7 @@ sudo mosquitto_passwd -b /etc/mosquitto/passwordfile monitor MonitorPass
 
 ### 3.3 Create the ACL file
 
-This restricts the board's user to only its own topics (defense in depth --
-even if the board's credentials leaked, they can't be used to spoof another
-student's topics or subscribe to everything):
+This restricts the board's user to only its own topics.
 
 ```bash
 sudo tee /etc/mosquitto/aclfile > /dev/null << 'EOF'
@@ -137,7 +122,7 @@ topic write telemetry/402102668/home
 topic write alarm/402102668/home
 topic write status/402102668/home
 
-# Monitor user: read-only, for the PC-side subscriber / grading
+# Monitor user: read-only, for the PC-side subscriber
 user monitor
 topic read persons/#
 topic read telemetry/#
@@ -187,9 +172,6 @@ mosquitto_pub -h localhost -p 1883 -u board_402102668 -P 402102668 -t 'persons/4
 # Expected: no error, exits cleanly
 
 # 4. Correct credentials but a topic OUTSIDE the ACL MUST be silently dropped
-#    (subscribe as `monitor` in one terminal, publish as `board_402102668`
-#    to someone else's topic in another, and confirm the subscriber never
-#    sees it):
 mosquitto_sub -h localhost -p 1883 -u monitor -P MonitorPass -t 'persons/#' -v &
 mosquitto_pub -h localhost -p 1883 -u board_402102668 -P 402102668 -t 'persons/00000000/home' -m '{"forbidden":true}'
 # Expected: the subscriber prints nothing for this message
@@ -210,10 +192,6 @@ sudo apt install -y build-essential libssl-dev libcurl4-openssl-dev \
 pip3 install numpy
 pip3 install "opencv-python-headless<5"
 ```
-
-(`opencv-python-headless` avoids pulling in GUI/X11 dependencies the board
-doesn't need, since the detector only writes JPEGs -- it never opens a
-window.)
 
 ### 4.2 Build the C board program
 
@@ -254,14 +232,13 @@ sudo chmod 600 /etc/smart-security/email.conf
 ```
 
 If using Gmail, you need an **App Password** (Google Account -> Security ->
-2-Step Verification -> App passwords), not your normal account password,
-since Gmail blocks plain SMTP auth with regular passwords.
+2-Step Verification -> App passwords), not your normal account password.
 
 ### 4.5 Configure MQTT credentials
 
 ```bash
 sudo tee /etc/smart-security/mqtt.conf > /dev/null << 'EOF'
-MQTT_HOST=192.168.1.101
+MQTT_HOST=192.168.1.50
 MQTT_PORT=1883
 MQTT_USER=board_402102668
 MQTT_PASS=402102668
@@ -289,8 +266,7 @@ sudo chown -R security:security /opt/smart-security /var/lib/smart-security
 
 The board process runs as an unprivileged `security` user (not root), but
 needs to trigger `reboot` (via `/api/v1/command`) and restart the detector
-service (via the watchdog and `restart_camera_service`). Grant exactly
-those two commands, nothing else:
+service (via the watchdog and `restart_camera_service`).
 
 ```bash
 sudo tee /etc/sudoers.d/smart-security > /dev/null << 'EOF'
@@ -311,8 +287,7 @@ sudo chmod 600 /etc/smart-security/*.conf 2>/dev/null
 ### 4.8 Edit and install the systemd unit files
 
 Open each of the three `.service` files in `orangepi-board/systemd/` and
-replace the placeholder student ID / laptop IP in `ExecStart=` with your
-real values, then:
+replace the placeholder laptop IP in `ExecStart=` with real values, then:
 
 ```bash
 sudo cp orangepi-board/systemd/*.service /etc/systemd/system/
@@ -352,8 +327,7 @@ Swagger UI.
 
 ## 5. SSH hardening (applies to the Orange Pi)
 
-Per the security requirements: root login disabled, and login via public
-key or password only (i.e., no other weaker auth methods left enabled).
+For: root login disabled, login via public key or password only
 
 ```bash
 sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak   # keep a backup
@@ -368,20 +342,9 @@ ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
 EOF
 
-sudo sshd -t          # validates config syntax BEFORE restarting -- do not skip this
+sudo sshd -t          # validates config syntax BEFORE restarting
 sudo systemctl restart sshd
 ```
-
-> If you intend to disable password auth entirely and require key-only
-> login, set up your public key first (`ssh-copy-id user@board-ip`), test
-> that key-based login works, and only then flip
-> `PasswordAuthentication no`. Doing it in the wrong order can lock you out
-> if something goes wrong with the key.
-
-Test 7-3 in the spec ("Unauthorized SSH login attempt") is satisfied by
-attempting a login as `root` (should be refused immediately due to
-`PermitRootLogin no`) or with a wrong password/key for a real user, and
-screenshotting the refusal.
 
 ---
 
@@ -389,11 +352,11 @@ screenshotting the refusal.
 
 | Process | Machine | Started by |
 |---|---|---|
-| `laptop_cam_server.py` | Laptop | Manually (own terminal) |
-| `mosquitto` | Laptop | systemd (`mosquitto.service`) |
-| `security-board` | Orange Pi | systemd (`security-board.service`) |
-| `person_detector.py` | Orange Pi | systemd (`person-detector.service`) |
-| FastAPI gateway (`uvicorn`) | Orange Pi | systemd (`swagger-gateway.service`) |
+| `laptop_cam_server.py` | Laptop    | Manually (`own terminal`) |
+| `mosquitto`            | Laptop    | systemd (`mosquitto.service`) |
+| `security-board`       | Orange Pi | systemd (`security-board.service`) |
+| `person_detector.py`   | Orange Pi | systemd (`person-detector.service`) |
+| `FastAPI gateway`      | Orange Pi | systemd (`swagger-gateway.service`) |
 
 ## 7. Order of operations for a fresh boot / demo
 
@@ -401,8 +364,6 @@ screenshotting the refusal.
    services, since `person-detector.service` depends on the stream).
 2. Laptop: confirm `mosquitto` is running (`systemctl status mosquitto`).
 3. Power on / reboot the Orange Pi -- systemd brings up all three board
-   services automatically in the correct dependency order (see the
-   ordering diagram in the report, generated from the `After=`/`Requires=`
-   directives in the `.service` files).
+   services automatically in the correct dependency order
 4. From any machine on the LAN: browse to `https://<board-ip>/` for the
    dashboard, or `http://<board-ip>:8000/docs` for Swagger.
